@@ -18,14 +18,16 @@ OPENROUTER_KEY = "sk-or-v1-ff08d8eba63431f2120a95c5a638dada83bb00fd2edbddd0564c1
 
 # Buat koneksi ke Supabase
 try:
-    supabase: Client = create_client(https://yrlqlzvhtyyzlcasviij.supabase.co, eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlybHFsenZodHl5emxjYXN2aWlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1NTIwNDcsImV4cCI6MjA3NzEyODA0N30.a2zQkdOQYVt-EFnCt-jd20ygwn2048lb-Mtgpe-t4uw)
+    # --- PERBAIKAN 1 ---
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error(f"Gagal terhubung ke Supabase: {e}")
     st.stop()
 
 # Buat koneksi ke AI
 try:
-    client_ai = OpenRouter(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)
+    # --- PERBAIKAN 2 ---
+    client_ai = OpenRouter(api_key=OPENROUTER_KEY)
 except Exception as e:
     st.error(f"Gagal terhubung ke OpenRouter: {e}")
     st.stop()
@@ -197,6 +199,4 @@ if submit_button:
             
             except Exception as e:
                 st.error(f"Error saat menjalankan kueri SQL: {e}")
-
                 st.write("Pastikan Anda sudah membuat function 'get_talent_match_results' di SQL Editor Supabase.")
-
