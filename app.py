@@ -197,4 +197,5 @@ if submit_button:
             
             except Exception as e:
                 st.error(f"Error saat menjalankan kueri SQL: {e}")
+
                 st.write("Pastikan Anda sudah membuat function 'get_talent_match_results' di SQL Editor Supabase.")
