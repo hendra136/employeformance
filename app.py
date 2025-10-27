@@ -1,200 +1,129 @@
+# app.py
 import streamlit as st
-from supabase import create_client, Client
 import pandas as pd
-from openrouter import OpenRouter # Ini bisa di-import karena kita install 'openrouter-client'
-import matplotlib.pyplot as plt
+import numpy as np
+from supabase import create_client
+import plotly.express as px
 import seaborn as sns
+import matplotlib.pyplot as plt
 
-# =======================================================================
-# 1. KONEKSI & SETUP (Menggunakan Streamlit Secrets)
-# =======================================================================
+# -------------------------
+# Config: ambil dari Streamlit secrets
+# -------------------------
+SUPABASE_URL = st.secrets["https://yrlqlzvhtyyzlcasviij.supabase.co"]
+SUPABASE_KEY = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlybHFsenZodHl5emxjYXN2aWlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1NTIwNDcsImV4cCI6MjA3NzEyODA0N30.a2zQkdOQYVt-EFnCt-jd20ygwn2048lb-Mtgpe-t4uw"]
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Ambil kunci dari file secrets.toml
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-OPENROUTER_KEY = st.secrets["OPENROUTER_KEY"]
+st.set_page_config(page_title="Talent Match Dashboard", layout="wide")
+st.title("Talent Match Dashboard — Step 3")
 
-# Buat koneksi ke Supabase
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) 
-except Exception as e:
-    st.error(f"Gagal terhubung ke Supabase: {e}")
+# -------------------------
+# Helper: load data (cached)
+# -------------------------
+@st.cache_data(ttl=300)
+def load_final_view():
+    # ambil seluruh view final_match_view
+    res = supabase.table("final_match_view").select("*").execute()
+    data = res.data
+    if data is None:
+        return pd.DataFrame()
+    return pd.DataFrame(data)
+
+df = load_final_view()
+
+if df.empty:
+    st.error("Data tidak ditemukan. Pastikan view final_match_view tersedia di Supabase dan secrets benar.")
     st.stop()
 
-# Buat koneksi ke AI
-try:
-    client_ai = OpenRouter(api_key=OPENROUTER_KEY) 
-except Exception as e:
-    st.error(f"Gagal terhubung ke OpenRouter: {e}")
-    st.stop()
+# -------------------------
+# Data cleaning / small fixes
+# -------------------------
+# Convert numeric strings to numeric types if needed
+num_cols = ['baseline_score','user_score','tv_match_rate','tgv_match_rate','final_match_rate']
+for c in num_cols:
+    if c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
 
-# =======================================================================
-# 2. JUDUL APLIKASI
-# =======================================================================
-st.set_page_config(layout="wide")
-st.title("🚀 Talent Match Intelligence System")
-st.write("Aplikasi ini akan membantu Anda menemukan talenta internal yang paling cocok dengan profil 'Top Performer' (Benchmark) Anda.")
+# Aggregate per employee: final summary
+df_emp = df.groupby(['employee_id','fullname']).agg(
+    final_match_rate=('final_match_rate','max'),  # final rate same across tgv maybe, use max/mean
+    avg_user_score=('user_score','mean'),
+    tgv_count=('tgv_name','nunique')
+).reset_index().sort_values('final_match_rate', ascending=False)
 
-# =======================================================================
-# 3. FUNGSI UNTUK MENGAMBIL DATA
-# =======================================================================
-# Kita butuh daftar karyawan untuk dipilih sebagai benchmark
-@st.cache_data(ttl=600) # Simpan cache selama 10 menit
-def get_employee_list():
-    try:
-        response = supabase.table('employees').select('employee_id, fullname').execute()
-        if response.data:
-            # Ubah data dari list-of-dict menjadi dict {id: nama}
-            return {emp['employee_id']: emp['fullname'] for emp in response.data}
-        return {}
-    except Exception as e:
-        st.error(f"Error mengambil daftar karyawan: {e}")
-        return {}
+# Sidebar controls
+st.sidebar.header("Filter & Controls")
+top_n = st.sidebar.slider("Tampilkan Top N", min_value=5, max_value=50, value=10, step=5)
+search_name = st.sidebar.text_input("Cari nama (substring)")
 
-# Ambil daftar karyawan
-employee_dict = get_employee_list()
-if not employee_dict:
-    st.error("Gagal memuat daftar karyawan dari database. Periksa koneksi/nama tabel 'employees'.")
-    st.stop()
+# Main: Ranking table
+st.subheader("Ranking Karyawan (Final Match Rate)")
+if search_name:
+    df_emp = df_emp[df_emp['fullname'].str.contains(search_name, case=False, na=False)]
 
-# =======================================================================
-# [cite_start]4. FORM INPUT (Sesuai dokumen [cite: 89-93])
-# =======================================================================
-with st.form(key="benchmark_form"):
-    st.header("1. Role Information")
-    role_name = st.text_input("Role Name", "Ex. Marketing Manager")
-    job_level = st.selectbox("Job Level", ["Staff", "Supervisor", "Manager", "Senior Manager"])
-    role_purpose = st.text_area("Role Purpose", "1-2 sentences to describe role outcome")
-    
-    st.header("2. Employee Benchmarking")
-    # Ubah format {id: nama} menjadi [nama1, nama2] untuk multiselect
-    employee_names = list(employee_dict.values())
-    selected_names = st.multiselect("Select Employee Benchmarking (max 3)", options=employee_names)
-    
-    submit_button = st.form_submit_button("🚀 Generate Job Description & Find Talent")
+st.dataframe(df_emp.head(top_n))
 
-# =======================================================================
-# 5. LOGIKA SETELAH TOMBOL SUBMIT DITEKAN
-# =======================================================================
-if submit_button:
-    if not role_name or not job_level or not role_purpose or not selected_names:
-        st.error("❌ Harap isi semua field sebelum submit!")
-    else:
-        with st.spinner("Menganalisis... Mohon tunggu..."):
-            
-            # --- TAHAP 3.1: SIMPAN DATA BARU ---
-            # Ubah [nama1, nama2] kembali menjadi [id1, id2]
-            # Ini adalah dictionary terbalik {nama: id}
-            name_to_id_dict = {v: k for k, v in employee_dict.items()}
-            selected_ids = [name_to_id_dict[name] for name in selected_names]
-            
-            try:
-                # Simpan input form ke tabel talent_benchmarks
-                insert_response = supabase.table('talent_benchmarks').insert({
-                    "role_name": role_name,
-                    "job_level": job_level,
-                    "role_purpose": role_purpose,
-                    "selected_talent_ids": selected_ids
-                }).execute()
-                
-                if not insert_response.data:
-                    st.error(f"Gagal menyimpan data benchmark: {insert_response.error}")
-                    st.stop() # Hentikan eksekusi jika gagal
-            
-            except Exception as e:
-                st.error(f"Error saat insert data: {e}")
-                st.stop()
-            
-            # [cite_start]--- TAHAP 3.2: PANGGIL AI (LLM) --- [cite: 116-117]
-            st.header("Al-Generated Job Profile")
-            try:
-                prompt = f"""
-                Buatkan draf profil pekerjaan untuk posisi: {role_name} ({job_level}).
-                Tujuan utama peran ini adalah: {role_purpose}.
-                Berdasarkan 'Success Formula' kami, kandidat ideal memiliki 3 TGV utama: 
-                1. Social Intelligence (Sangat empatik, komunikator ulung).
-                2. Discipline (Fokus pada kualitas dan kepatuhan).
-                3. Vision (Futuristik dan seorang inisiator/aktivator).
-                
-                Tolong buatkan draf yang menarik untuk:
-                1. Job Description (Deskripsi Pekerjaan)
-                2. Key Responsibilities (Tanggung Jawab Utama)
-                3. Key Competencies (Kompetensi Kunci) (gabungkan TGV di atas)
-                """
-                
-                response_ai = client_ai.chat.completions.create(
-                    model="mistralai/mistral-7b-instruct:free", # Model gratis & cepat
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=500
-                )
-                
-                ai_output = response_ai.choices[0].message.content
-                st.markdown(ai_output) # Tampilkan output AI
-                
-            except Exception as e:
-                st.warning(f"Gagal memanggil AI: {e}. Melanjutkan tanpa AI.")
+# Bar chart Top N
+st.subheader(f"Top {top_n} by Final Match Rate")
+top_df = df_emp.head(top_n)
+fig = px.bar(top_df, x='fullname', y='final_match_rate',
+             hover_data=['employee_id','avg_user_score','tgv_count'],
+             labels={'final_match_rate':'Final Match Rate'},
+             height=400)
+fig.update_layout(xaxis_tickangle=-45)
+st.plotly_chart(fig, use_container_width=True)
 
-            # --- TAHAP 3.3: JALANKAN KUERI SQL UTAMA ---
-            st.header("Ranked Talent List & Dashboard")
-            try:
-                # Panggil "function" SQL yang kita buat di Tahap 2
-                data_response = supabase.rpc('get_talent_match_results').execute()
-                
-                if data_response.data:
-                    # Ubah data (list of dict) menjadi DataFrame Pandas
-                    df_results = pd.DataFrame(data_response.data)
-                    
-                    # --- TAHAP 3.4.A: TAMPILKAN RANKED LIST ---
-                    st.subheader("Ranked Talent List (Top Matches)")
-                    # Kita butuh 1 baris per karyawan (buang "duplikat")
-                    df_ranked_list = df_results.drop_duplicates(subset=['employee_id']).sort_values(
-                        by="final_match_rate", ascending=False
-                    )
-                    st.dataframe(
-                        df_ranked_list[['fullname', 'role', 'directorate', 'grade', 'final_match_rate']].head(20),
-                        use_container_width=True
-                    )
+# Select employee for detail
+st.sidebar.subheader("Detail Pegawai")
+selected_emp = st.sidebar.selectbox("Pilih employee_id", options=df_emp['employee_id'].tolist())
 
-                    # --- TAHAP 3.4.B: TAMPILKAN VISUALISASI ---
-                    st.subheader("Dashboard Visualizations")
-                    col1, col2 = st.columns(2)
-                    
-                    # Visual 1: Distribusi Skor
-                    with col1:
-                        st.write("Distribusi Final Match Rate (Semua Karyawan)")
-                        fig, ax = plt.subplots()
-                        sns.histplot(df_ranked_list['final_match_rate'].dropna(), kde=True, ax=ax, bins=20)
-                        ax.set_xlabel('Final Match Rate (%)')
-                        ax.set_ylabel('Jumlah Karyawan')
-                        st.pyplot(fig)
-                    
-                    # Visual 2: Rata-rata TGV Teratas
-                    with col2:
-                        st.write("Kekuatan TGV (Rata-rata Top 10 Kandidat)")
-                        # Ambil top 10 karyawan
-                        top_10_ids = df_ranked_list.head(10)['employee_id']
-                        # Filter data detail HANYA untuk top 10
-                        df_top_10_details = df_results[df_results['employee_id'].isin(top_10_ids)]
-                        
-                        # Hitung rata-rata TGV
-                        tgv_avg = df_top_10_details.drop_duplicates(
-                            subset=['employee_id', 'tgv_name']
-                        ).groupby('tgv_name')['tgv_match_rate'].mean().reset_index().sort_values(
-                            by='tgv_match_rate', ascending=False
-                        )
-                        
-                        fig, ax = plt.subplots()
-                        sns.barplot(data=tgv_avg, x='tgv_match_rate', y='tgv_name', ax=ax, palette='viridis')
-                        ax.set_xlabel('Rata-rata Match Rate (%)')
-                        ax.set_ylabel('Talent Group Variable (TGV)')
-                        st.pyplot(fig)
+# Detail: show per-TGV breakdown & radar by TV if available
+emp_df = df[df['employee_id'] == selected_emp].copy()
+if emp_df.empty:
+    st.info("Tidak ada data detail untuk employee ini.")
+else:
+    st.subheader("Detail: " + emp_df['fullname'].iloc[0])
+    st.markdown(f"- **Final Match Rate:** {emp_df['final_match_rate'].dropna().unique()}")
+    st.markdown(f"- **Jumlah TGV terlibat:** {emp_df['tgv_name'].nunique()}")
 
-                else:
-                    st.error(f"Gagal menjalankan kueri SQL. Error: {data_response.error}")
-                    st.write("Pastikan Anda sudah membuat function 'get_talent_match_results' di SQL Editor Supabase.")
-            
-            except Exception as e:
-                st.error(f"Error saat menjalankan kueri SQL: {e}")
-                st.write("Pastikan Anda sudah membuat function 'get_talent_match_results' di SQL Editor Supabase.")
+    # show TGV match rates bar
+    tgv_plot = emp_df[['tgv_name','tgv_match_rate']].drop_duplicates().dropna()
+    if not tgv_plot.empty:
+        fig2 = px.bar(tgv_plot, x='tgv_name', y='tgv_match_rate',
+                      labels={'tgv_match_rate':'TGV Match Rate (%)'}, height=350)
+        st.plotly_chart(fig2, use_container_width=True)
 
+    # TV-level heatmap (pivot tv_name x tv_match_rate)
+    pivot = emp_df.pivot_table(index='tv_name', values='tv_match_rate', aggfunc='max').reset_index()
+    if not pivot.empty:
+        st.subheader("TV Match Rates (per TV)")
+        st.dataframe(pivot.sort_values('tv_match_rate', ascending=False))
+        # small heatmap
+        plt.figure(figsize=(6, max(1, len(pivot)/4)))
+        sns.heatmap(pivot.set_index('tv_name').T, annot=True, cmap='YlGnBu', cbar=True)
+        st.pyplot(plt.gcf())
+        plt.clf()
 
+    # Radar: take TV numeric scores (user_score) normalized
+    tv_scores = emp_df.pivot_table(index='tv_name', values='user_score', aggfunc='max').dropna()
+    if not tv_scores.empty:
+        st.subheader("Radar: TV (user scores)")
+        labels = tv_scores.index.tolist()
+        values = tv_scores['user_score'].values.tolist()
+        # normalize to 0-1
+        vals = (np.array(values) - np.nanmin(values)) / (np.nanmax(values) - np.nanmin(values) + 1e-9)
+        vals = np.concatenate([vals, [vals[0]]])
+        angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+        angles += angles[:1]
+        import matplotlib.pyplot as plt
+        fig = plt.figure(figsize=(6,6))
+        ax = fig.add_subplot(111, polar=True)
+        ax.plot(angles, vals, linewidth=1, linestyle='solid')
+        ax.fill(angles, vals, alpha=0.3)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels, fontsize=8)
+        st.pyplot(fig)
+        plt.clf()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("Data source: Supabase `final_match_view`")
