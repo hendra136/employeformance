@@ -6,28 +6,24 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # =======================================================================
-# 1. KONEKSI & SETUP
+# 1. KONEKSI & SETUP (Menggunakan Streamlit Secrets)
 # =======================================================================
 
-# GANTI DENGAN KUNCI ANDA DARI STEP 3.B
-SUPABASE_URL = "https://yrlqlzvhtyyzlcasviij.supabase.co"
-SUPABASE_KEY = "sb_publishable_mydcY0l3E6LYSSHxDIi-rQ_mkkPnuMC"
-
-# GANTI DENGAN KUNCI ANDA DARI STEP 3.C
-OPENROUTER_KEY = "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"
+# Ambil kunci dari file secrets.toml
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+OPENROUTER_KEY = st.secrets["OPENROUTER_KEY"]
 
 # Buat koneksi ke Supabase
 try:
-    # --- PERBAIKAN 1 ---
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) 
 except Exception as e:
     st.error(f"Gagal terhubung ke Supabase: {e}")
     st.stop()
 
 # Buat koneksi ke AI
 try:
-    # --- PERBAIKAN 2 ---
-    client_ai = OpenRouter(api_key=OPENROUTER_KEY)
+    client_ai = OpenRouter(api_key=OPENROUTER_KEY) 
 except Exception as e:
     st.error(f"Gagal terhubung ke OpenRouter: {e}")
     st.stop()
@@ -200,4 +196,5 @@ if submit_button:
             except Exception as e:
                 st.error(f"Error saat menjalankan kueri SQL: {e}")
                 st.write("Pastikan Anda sudah membuat function 'get_talent_match_results' di SQL Editor Supabase.")
+
 
